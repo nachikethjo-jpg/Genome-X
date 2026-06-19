@@ -1,0 +1,55 @@
+{
+  "entities": {
+    "UserProfile": {
+      "title": "UserProfile",
+      "description": "Public user profile and identity details.",
+      "type": "object",
+      "properties": {
+        "username": { "type": "string" },
+        "email": { "type": "string", "format": "email" },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["username", "email", "createdAt"]
+    },
+    "GenomicAnalysis": {
+      "title": "GenomicAnalysis",
+      "description": "A saved historical genomic sequence analysis result.",
+      "type": "object",
+      "properties": {
+        "userId": { "type": "string" },
+        "geneName": { "type": "string" },
+        "diseaseContext": { "type": "string" },
+        "referenceSeq": { "type": "string" },
+        "sampleSeq": { "type": "string" },
+        "variantsCount": { "type": "integer" },
+        "alignmentScore": { "type": "number" },
+        "alignmentResult": { "type": "object" },
+        "refTranslation": { "type": "object" },
+        "sampleTranslation": { "type": "object" },
+        "variants": { "type": "array" },
+        "interpretation": { "type": "object" },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": [
+        "userId",
+        "geneName",
+        "diseaseContext",
+        "referenceSeq",
+        "sampleSeq",
+        "variantsCount",
+        "alignmentScore",
+        "createdAt"
+      ]
+    }
+  },
+  "firestore": {
+    "/users/{userId}/public/profile": {
+      "schema": "UserProfile",
+      "description": "Stores user profiles with basic information."
+    },
+    "/users/{userId}/analyses/{analysisId}": {
+      "schema": "GenomicAnalysis",
+      "description": "Stores genetic sequence analysis runs under the specific user's namespace."
+    }
+  }
+}

@@ -1,0 +1,91 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // Global Safety Net default catch-all
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // Helper Functions
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isEmailVerified() {
+      return isSignedIn() && request.auth.token.email_verified == true;
+    }
+
+    function isValidId(id) {
+      return id is string && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    // Entity validator: UserProfile
+    function isValidUserProfile(data) {
+      return data.keys().hasAll(['username', 'email', 'createdAt'])
+        && data.keys().size() == 3
+        && data.username is string
+        && data.username.size() >= 1
+        && data.username.size() <= 100
+        && data.email is string
+        && data.email.size() <= 100
+        && data.createdAt is timestamp;
+    }
+
+    // Entity validator: GenomicAnalysis
+    function isValidGenomicAnalysis(data) {
+      return data.keys().hasAll(['userId', 'geneName', 'diseaseContext', 'referenceSeq', 'sampleSeq', 'variantsCount', 'alignmentScore', 'createdAt'])
+        && data.userId is string
+        && data.userId.size() <= 128
+        && data.geneName is string
+        && data.geneName.size() <= 150
+        && data.diseaseContext is string
+        && data.diseaseContext.size() <= 250
+        && data.referenceSeq is string
+        && data.referenceSeq.size() <= 20000
+        && data.sampleSeq is string
+        && data.sampleSeq.size() <= 20000
+        && data.variantsCount is int
+        && data.alignmentScore is number
+        && data.createdAt is timestamp;
+    }
+
+    // User collections path mapping
+    match /users/{userId} {
+      // Allow get/list on the user document itself if signed in as them
+      allow read: if isSignedIn() && request.auth.uid == userId;
+
+      match /public/profile {
+        allow read: if isSignedIn() && request.auth.uid == userId;
+        allow create: if isSignedIn()
+          && request.auth.uid == userId
+          && isValidUserProfile(request.resource.data)
+          && request.resource.data.createdAt == request.time;
+        allow update: if isSignedIn()
+          && request.auth.uid == userId
+          && isValidUserProfile(request.resource.data)
+          && request.resource.data.createdAt == resource.data.createdAt;
+      }
+
+      match /analyses/{analysisId} {
+        allow read: if isSignedIn() && request.auth.uid == userId;
+        allow delete: if isSignedIn() && request.auth.uid == userId;
+
+        allow create: if isSignedIn()
+          && request.auth.uid == userId
+          && isValidId(analysisId)
+          && isValidGenomicAnalysis(request.resource.data)
+          && request.resource.data.userId == userId
+          && request.resource.data.createdAt == request.time;
+
+        allow update: if isSignedIn()
+          && request.auth.uid == userId
+          && isValidId(analysisId)
+          && isValidGenomicAnalysis(request.resource.data)
+          && request.resource.data.userId == userId
+          && request.resource.data.userId == resource.data.userId
+          && request.resource.data.createdAt == resource.data.createdAt;
+      }
+    }
+  }
+}

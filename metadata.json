@@ -1,0 +1,6 @@
+{
+  "name": "Genome Sequence and Genetic Variant Analyzer",
+  "description": "Analyze genome sequences, run pairwise sequence alignment, identify genetic variants (SNVs, insertions, deletions), and fetch AI-driven biochemical and clinical interpretations.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
