@@ -21,6 +21,39 @@ const ai = new GoogleGenAI({
   },
 });
 
+// Robust retry wrapper function with exponential backoff for handling transient errors:
+async function callGeminiWithRetry<T>(fn: () => Promise<T>, maxRetries = 3, baseDelayMs = 1500): Promise<T> {
+  let attempt = 0;
+  while (true) {
+    try {
+      return await fn();
+    } catch (err: any) {
+      attempt++;
+      const errMsg = err.message || "";
+      const errStatus = err.status || "";
+      const errCode = err.code || 0;
+
+      const isTransient =
+        errMsg.includes("503") ||
+        errMsg.includes("429") ||
+        errMsg.includes("UNAVAILABLE") ||
+        errMsg.includes("RESOURCE_EXHAUSTED") ||
+        errStatus === "UNAVAILABLE" ||
+        errStatus === "RESOURCE_EXHAUSTED" ||
+        errCode === 503 ||
+        errCode === 429;
+
+      if (attempt <= maxRetries && isTransient) {
+        const delay = baseDelayMs * Math.pow(2, attempt - 1);
+        console.warn(`Gemini API: Transient error (status: ${errStatus}, code: ${errCode}, msg: ${errMsg}). Retrying in ${delay}ms (attempt ${attempt}/${maxRetries})...`);
+        await new Promise((resolve) => setTimeout(resolve, delay));
+      } else {
+        throw err;
+      }
+    }
+  }
+}
+
 // Codon to Amino Acid translation table
 const CODON_TABLE: Record<string, string> = {
   ATG: "M", TGG: "W",
@@ -275,40 +308,42 @@ app.post("/api/analyze-variants", async (req, res) => {
       `;
 
       try {
-        const response = await ai.models.generateContent({
-          model: "gemini-3.5-flash",
-          contents: prompt,
-          config: {
-            responseMimeType: "application/json",
-            responseSchema: {
-              type: Type.OBJECT,
-              properties: {
-                summary: { type: Type.STRING },
-                functionalImpact: { type: Type.STRING },
-                diseaseAffiliation: { type: Type.STRING },
-                variantInterpretations: {
-                  type: Type.ARRAY,
-                  items: {
-                    type: Type.OBJECT,
-                    properties: {
-                      position: { type: Type.STRING },
-                      type: { type: Type.STRING },
-                      change: { type: Type.STRING },
-                      significance: { type: Type.STRING },
-                      details: { type: Type.STRING }
-                    },
-                    required: ["position", "type", "change", "significance", "details"]
+        const response = await callGeminiWithRetry(() =>
+          ai.models.generateContent({
+            model: "gemini-3.5-flash",
+            contents: prompt,
+            config: {
+              responseMimeType: "application/json",
+              responseSchema: {
+                type: Type.OBJECT,
+                properties: {
+                  summary: { type: Type.STRING },
+                  functionalImpact: { type: Type.STRING },
+                  diseaseAffiliation: { type: Type.STRING },
+                  variantInterpretations: {
+                    type: Type.ARRAY,
+                    items: {
+                      type: Type.OBJECT,
+                      properties: {
+                        position: { type: Type.STRING },
+                        type: { type: Type.STRING },
+                        change: { type: Type.STRING },
+                        significance: { type: Type.STRING },
+                        details: { type: Type.STRING }
+                      },
+                      required: ["position", "type", "change", "significance", "details"]
+                    }
+                  },
+                  recommendations: {
+                    type: Type.ARRAY,
+                    items: { type: Type.STRING }
                   }
                 },
-                recommendations: {
-                  type: Type.ARRAY,
-                  items: { type: Type.STRING }
-                }
-              },
-              required: ["summary", "functionalImpact", "diseaseAffiliation", "variantInterpretations", "recommendations"]
+                required: ["summary", "functionalImpact", "diseaseAffiliation", "variantInterpretations", "recommendations"]
+              }
             }
-          }
-        });
+          })
+        );
 
         if (response && response.text) {
           interpretation = JSON.parse(response.text.trim());
@@ -428,24 +463,28 @@ app.post("/api/chat-variant", async (req, res) => {
     try {
       let response;
       try {
-        response = await ai.models.generateContent({
-          model: "gemini-3.5-flash",
-          contents: formattedContents,
-          config: {
-            systemInstruction,
-            tools: [{ googleSearch: {} }]
-          }
-        });
+        response = await callGeminiWithRetry(() =>
+          ai.models.generateContent({
+            model: "gemini-3.5-flash",
+            contents: formattedContents,
+            config: {
+              systemInstruction,
+              tools: [{ googleSearch: {} }]
+            }
+          })
+        );
       } catch (searchErr: any) {
         console.warn("Retrying without Google Search grounding due to error:", searchErr.message || searchErr);
         // Fallback: retry without tools in case search grounding is restricted or causes invalid argument
-        response = await ai.models.generateContent({
-          model: "gemini-3.5-flash",
-          contents: formattedContents,
-          config: {
-            systemInstruction
-          }
-        });
+        response = await callGeminiWithRetry(() =>
+          ai.models.generateContent({
+            model: "gemini-3.5-flash",
+            contents: formattedContents,
+            config: {
+              systemInstruction
+            }
+          })
+        );
       }
       if (response && response.text) {
         aiResponseText = response.text;
@@ -514,29 +553,31 @@ app.post("/api/crispr-simulate", async (req, res) => {
       `;
 
       try {
-        const response = await ai.models.generateContent({
-          model: "gemini-3.5-flash",
-          contents: prompt,
-          config: {
-            responseMimeType: "application/json",
-            responseSchema: {
-              type: Type.OBJECT,
-              properties: {
-                bindScore: { type: Type.NUMBER },
-                cutPosition: { type: Type.NUMBER },
-                hdrTemplate: { type: Type.STRING },
-                therapeuticalFeasibility: { type: Type.STRING },
-                molecularConsequence: { type: Type.STRING },
-                offTargetEvaluation: { type: Type.STRING },
-                experimentalSteps: {
-                  type: Type.ARRAY,
-                  items: { type: Type.STRING }
-                }
-              },
-              required: ["bindScore", "cutPosition", "hdrTemplate", "therapeuticalFeasibility", "molecularConsequence", "offTargetEvaluation", "experimentalSteps"]
+        const response = await callGeminiWithRetry(() =>
+          ai.models.generateContent({
+            model: "gemini-3.5-flash",
+            contents: prompt,
+            config: {
+              responseMimeType: "application/json",
+              responseSchema: {
+                type: Type.OBJECT,
+                properties: {
+                  bindScore: { type: Type.NUMBER },
+                  cutPosition: { type: Type.NUMBER },
+                  hdrTemplate: { type: Type.STRING },
+                  therapeuticalFeasibility: { type: Type.STRING },
+                  molecularConsequence: { type: Type.STRING },
+                  offTargetEvaluation: { type: Type.STRING },
+                  experimentalSteps: {
+                    type: Type.ARRAY,
+                    items: { type: Type.STRING }
+                  }
+                },
+                required: ["bindScore", "cutPosition", "hdrTemplate", "therapeuticalFeasibility", "molecularConsequence", "offTargetEvaluation", "experimentalSteps"]
+              }
             }
-          }
-        });
+          })
+        );
 
         if (response && response.text) {
           simulationResult = JSON.parse(response.text.trim());
