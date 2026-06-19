@@ -45,7 +45,7 @@ async function callGeminiWithRetry<T>(fn: () => Promise<T>, maxRetries = 3, base
 
       if (attempt <= maxRetries && isTransient) {
         const delay = baseDelayMs * Math.pow(2, attempt - 1);
-        console.warn(`Gemini API: Transient error (status: ${errStatus}, code: ${errCode}, msg: ${errMsg}). Retrying in ${delay}ms (attempt ${attempt}/${maxRetries})...`);
+        console.log(`Gemini API: Status ${errStatus} (Code ${errCode}) - Retrying path in ${delay}ms (attempt ${attempt}/${maxRetries})...`);
         await new Promise((resolve) => setTimeout(resolve, delay));
       } else {
         throw err;
@@ -350,7 +350,7 @@ app.post("/api/analyze-variants", async (req, res) => {
           if (!interpretation.warning) interpretation.warning = null;
         }
       } catch (err: any) {
-        console.error("Gemini API Error (Analyze Variants):", err.message || err);
+        console.log("Gemini API (Analyze Variants) temporarily unavailable. Returning safe default assessments.");
         interpretation.warning = "AI analysis temporarily unavailable due to capacity limits. Results provided are default assessments.";
         // Fallback already prepared in 'interpretation'
       }
@@ -414,7 +414,7 @@ app.post("/api/analyze-variants", async (req, res) => {
     });
 
   } catch (error: any) {
-    console.error("Genomic analysis error:", error);
+    console.log("Genome calculation halted:", error.message || error);
     res.status(500).json({ error: error.message || "An error occurred during genome computation." });
   }
 });
@@ -490,13 +490,13 @@ app.post("/api/chat-variant", async (req, res) => {
         aiResponseText = response.text;
       }
     } catch (err: any) {
-      console.error("Gemini API Error (Chat):", err.message || err);
+      console.log("Gemini API (Chat) temporarily busy.");
     }
 
     res.json({ response: aiResponseText });
 
   } catch (error: any) {
-    console.error("Chat variant error:", error);
+    console.log("Chat system execution issues occurred.");
     res.status(500).json({ error: error.message || "An error occurred in clinical chat." });
   }
 });
@@ -583,7 +583,7 @@ app.post("/api/crispr-simulate", async (req, res) => {
           simulationResult = JSON.parse(response.text.trim());
         }
       } catch (err: any) {
-        console.error("Gemini API Error (CRISPR Simulate):", err.message || err);
+        console.log("Gemini API (CRISPR Simulate) temporarily busy. Utilizing local bioengineering model.");
         // Fallback simulationResult is already assigned to variable
       }
     }
@@ -594,7 +594,7 @@ app.post("/api/crispr-simulate", async (req, res) => {
     });
 
   } catch (error: any) {
-    console.error("CRISPR simulation error:", error);
+    console.log("CRISPR simulator execution issue occurred.");
     res.status(500).json({ error: error.message || "An error occurred during Cas9 targeting simulation." });
   }
 });

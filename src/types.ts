@@ -91,6 +91,15 @@ export interface CRISPRSimulationResult {
   experimentalSteps: string[];
 }
 
+export interface SampleInput {
+  id: string;
+  name: string;
+  sequence: string;
+  status: "idle" | "analyzing" | "completed" | "error";
+  result?: AnalysisResponse | null;
+  error?: string | null;
+}
+
 export const GENE_PRESETS: GenePreset[] = [
   {
     id: "brca1",

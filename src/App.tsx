@@ -30,7 +30,7 @@ import {
   Target,
   Zap,
 } from "lucide-react";
-import { GENE_PRESETS, GenePreset, AnalysisResponse, ChatMessage, Variant, SgRNACandidate, CRISPRSimulationResult } from "./types";
+import { GENE_PRESETS, GenePreset, AnalysisResponse, ChatMessage, Variant, SgRNACandidate, CRISPRSimulationResult, SampleInput } from "./types";
 import { VariantScatterPlot, ScatterVariant } from "./components/VariantScatterPlot";
 import { auth, signInWithGoogle, logOut, db, handleFirestoreError, OperationType } from "./lib/firebase";
 import { collection, addDoc, query, orderBy, getDocs, deleteDoc, doc, serverTimestamp } from "firebase/firestore";
@@ -196,6 +196,19 @@ export default function App() {
     setSelectedVariantIdx(null);
     setCustomAcmgToggles({});
     
+    // Set samples list with this loaded run as active!
+    const loadedSampleId = `sample-loaded-${saved.id || Date.now()}`;
+    const loadedSample: SampleInput = {
+      id: loadedSampleId,
+      name: saved.geneName ? `${saved.geneName} Saved Run` : "Saved Sample",
+      sequence: saved.sampleSeq,
+      status: "completed",
+      result: loadedResult,
+      error: null
+    };
+    setSamples([loadedSample]);
+    setActiveSampleId(loadedSampleId);
+
     const guides = findSgRNAs(saved.referenceSeq, saved.variants);
     setSgRNACandidates(guides);
     if (guides.length > 0) {
@@ -221,6 +234,18 @@ export default function App() {
   const [referenceSeq, setReferenceSeq] = useState<string>("ATGGTGCACCTGACTCCTGAGGAGAAGTCTGCCGTTACTGCCCTGTGGGGCAAGGTGAAC");
   const [sampleSeq, setSampleSeq] = useState<string>("ATGGTGCACCTGACTCCTGTGGAGAAGTCTGCCGTTACTGCCCTGTGGGGCAAGGTGAAC");
   
+  const [samples, setSamples] = useState<SampleInput[]>([
+    {
+      id: "sample-hbb",
+      name: "Patient Alt 1 (Sickle Cell)",
+      sequence: "ATGGTGCACCTGACTCCTGTGGAGAAGTCTGCCGTTACTGCCCTGTGGGGCAAGGTGAAC",
+      status: "idle",
+      result: null,
+      error: null
+    }
+  ]);
+  const [activeSampleId, setActiveSampleId] = useState<string>("sample-hbb");
+
   const [isAnalyzing, setIsAnalyzing] = useState<boolean>(false);
   const [analysisResult, setAnalysisResult] = useState<AnalysisResponse | null>(null);
   const [analysisError, setAnalysisError] = useState<string | null>(null);
@@ -230,6 +255,8 @@ export default function App() {
   const [chatInput, setChatInput] = useState<string>("");
   const [isChatSending, setIsChatSending] = useState<boolean>(false);
   const chatEndRef = useRef<HTMLDivElement | null>(null);
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
+  const [isDragActive, setIsDragActive] = useState<boolean>(false);
 
   // Active view tab state (Overview and Align vs. AI Interpretation)
   const [activeTab, setActiveTab ] = useState<"alignment" | "interpretation" | "crispr">("alignment");
@@ -624,6 +651,191 @@ export default function App() {
     return validCount > 0 ? diffCount / validCount : 0;
   };
 
+  const handleDrag = (e: React.DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    if (e.type === "dragenter" || e.type === "dragover") {
+      setIsDragActive(true);
+    } else if (e.type === "dragleave" || e.type === "drop") {
+      setIsDragActive(false);
+    }
+  };
+
+  const handleDrop = async (e: React.DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setIsDragActive(false);
+    if (e.dataTransfer.files && e.dataTransfer.files.length > 0) {
+      await handleAddFiles(e.dataTransfer.files);
+    }
+  };
+
+  const handleAddBlankSample = () => {
+    const newId = `sample-${Date.now()}`;
+    const newSample: SampleInput = {
+      id: newId,
+      name: `Sample ${samples.length + 1}`,
+      sequence: "ATGGTGCACCTGACTCCTGTGGAGAAGTCTGCCGTTACTGCCCTGTGGGGCAAGGTGAAC",
+      status: "idle",
+      result: null,
+      error: null
+    };
+    setSamples(prev => [...prev, newSample]);
+    setActiveSampleId(newId);
+    setSampleSeq(newSample.sequence);
+    setAnalysisResult(null);
+    setAnalysisError(null);
+  };
+
+  const handleAddFiles = async (files: FileList) => {
+    const parsedSamples: SampleInput[] = [];
+    for (let i = 0; i < files.length; i++) {
+      const file = files[i];
+      try {
+        const text = await file.text();
+        const lines = text.split("\n");
+        let currentHeader = file.name.replace(/\.[^/.]+$/, "");
+        let currentSeqStr = "";
+        const fileSamples: SampleInput[] = [];
+        
+        for (const line of lines) {
+          const trimmed = line.trim();
+          if (trimmed.startsWith(">")) {
+            if (currentSeqStr) {
+              fileSamples.push({
+                id: `sample-upload-${Date.now()}-${Math.random().toString(36).substr(2, 5)}`,
+                name: currentHeader,
+                sequence: currentSeqStr.toUpperCase().replace(/[^A-Z]/g, ""),
+                status: "idle",
+                result: null,
+                error: null
+              });
+              currentSeqStr = "";
+            }
+            currentHeader = trimmed.substring(1).trim() || `Uploaded Sample`;
+          } else {
+            currentSeqStr += trimmed;
+          }
+        }
+        
+        if (currentSeqStr) {
+          fileSamples.push({
+            id: `sample-upload-${Date.now()}-${Math.random().toString(36).substr(2, 5)}`,
+            name: currentHeader,
+            sequence: currentSeqStr.toUpperCase().replace(/[^A-Z]/g, ""),
+            status: "idle",
+            result: null,
+            error: null
+          });
+        }
+        
+        if (fileSamples.length === 0 && text.trim()) {
+          const cleanedText = text.toUpperCase().replace(/[^A-Z]/g, "");
+          fileSamples.push({
+            id: `sample-upload-${Date.now()}-${Math.random().toString(36).substr(2, 5)}`,
+            name: file.name.replace(/\.[^/.]+$/, ""),
+            sequence: cleanedText,
+            status: "idle",
+            result: null,
+            error: null
+          });
+        }
+        
+        parsedSamples.push(...fileSamples);
+      } catch (err) {
+        console.error("Error reading file", file.name, err);
+      }
+    }
+    
+    if (parsedSamples.length > 0) {
+      setSamples(prev => {
+        const newList = [...prev, ...parsedSamples];
+        setTimeout(() => {
+          handleSelectSample(parsedSamples[0].id, newList);
+        }, 0);
+        return newList;
+      });
+    }
+  };
+
+  const handleUpdateSampleName = (id: string, name: string) => {
+    setSamples(prev => prev.map(s => s.id === id ? { ...s, name } : s));
+  };
+
+  const handleUpdateSampleSequence = (id: string, seq: string) => {
+    const cleanedSeq = seq.toUpperCase().replace(/[^A-Z]/g, "");
+    setSamples(prev => prev.map(s => s.id === id ? { ...s, sequence: cleanedSeq, status: "idle", result: null } : s));
+    if (id === activeSampleId) {
+      setSampleSeq(cleanedSeq);
+      setAnalysisResult(null);
+    }
+  };
+
+  const handleDeleteSample = (id: string) => {
+    if (samples.length <= 1) {
+      return;
+    }
+    const filtered = samples.filter(s => s.id !== id);
+    setSamples(filtered);
+    if (activeSampleId === id) {
+      const nextActive = filtered[0];
+      handleSelectSample(nextActive.id, filtered);
+    }
+  };
+
+  const handleSelectSample = (id: string, updatedSamplesList?: SampleInput[]) => {
+    const list = updatedSamplesList || samples;
+    const target = list.find(s => s.id === id);
+    if (target) {
+      setActiveSampleId(id);
+      setSampleSeq(target.sequence);
+      if (target.result) {
+        setAnalysisResult(target.result);
+        setAnalysisError(null);
+        const guides = findSgRNAs(referenceSeq, target.result.variants);
+        setSgRNACandidates(guides);
+        if (guides.length > 0) {
+          setSelectedSgRNA(guides[0]);
+        } else {
+          setSelectedSgRNA(null);
+        }
+        setCrisprSimulation(null);
+      } else {
+        setAnalysisResult(null);
+        setAnalysisError(target.error || null);
+        setSgRNACandidates([]);
+        setSelectedSgRNA(null);
+        setCrisprSimulation(null);
+      }
+    }
+  };
+
+  const getSampleMetrics = (sample: SampleInput) => {
+    const result = sample.result;
+    if (!result) return {
+      length: sample.sequence.length,
+      gc: sample.sequence ? parseFloat(((sample.sequence.split("").filter((b: string) => b === "G" || b === "C").length / sample.sequence.length) * 100).toFixed(1)) : 0,
+      score: "-",
+      subs: "-",
+      dels: "-",
+      ins: "-",
+      total: "-"
+    };
+    const variants = result.variants || [];
+    const subs = variants.filter(v => v.type.toLowerCase() === "substitution").length;
+    const dels = variants.filter(v => v.type.toLowerCase() === "deletion").length;
+    const ins = variants.filter(v => v.type.toLowerCase() === "insertion").length;
+    return {
+      length: result.metrics?.sampleLength || sample.sequence.length,
+      gc: result.metrics?.sampleGC || 0,
+      score: result.alignment?.score || 0,
+      subs,
+      dels,
+      ins,
+      total: variants.length
+    };
+  };
+
   // Load a preset
   const handleLoadPreset = (preset: GenePreset) => {
     setSelectedPresetId(preset.id);
@@ -632,12 +844,30 @@ export default function App() {
     setReferenceSeq(preset.referenceSeq);
     setSampleSeq(preset.sampleSeq);
     setSelectedVariantIdx(null);
+    
+    // Reset samples array for the new preset
+    const presetSample: SampleInput = {
+      id: `sample-${preset.id}`,
+      name: `${preset.name.split(" (")[0]} Genotype`,
+      sequence: preset.sampleSeq,
+      status: "idle",
+      result: null,
+      error: null
+    };
+    setSamples([presetSample]);
+    setActiveSampleId(presetSample.id);
+    setAnalysisResult(null);
+    setAnalysisError(null);
   };
 
   // Run genome sequence analysis
-  const runAnalysis = async (customRef?: string, customSample?: string, customGene?: string, customDisease?: string) => {
+  const runAnalysis = async (customRef?: string, customSample?: string, customGene?: string, customDisease?: string, targetSampleId?: string) => {
     setIsAnalyzing(true);
     setAnalysisError(null);
+    const runSampleId = targetSampleId || activeSampleId;
+    
+    setSamples(prev => prev.map(s => s.id === runSampleId ? { ...s, status: "analyzing" as const } : s));
+    
     try {
       const response = await fetch("/api/analyze-variants", {
         method: "POST",
@@ -660,6 +890,9 @@ export default function App() {
         setSelectedVariantIdx(null);
         setCustomAcmgToggles({});
         
+        // Update samples state with completion
+        setSamples(prev => prev.map(s => s.id === runSampleId ? { ...s, status: "completed" as const, result: data, error: null } : s));
+
         // Scan for CRISPR Cas9 guide candidates
         const guides = findSgRNAs(customRef || referenceSeq, data.variants);
         setSgRNACandidates(guides);
@@ -714,7 +947,94 @@ I have compiled the full clinical interpretation report under the **Interpretati
       }
     } catch (err: any) {
       console.error(err);
-      setAnalysisError(err.message || "An unknown network error occurred.");
+      const errMsg = err.message || "An unknown network error occurred.";
+      setAnalysisError(errMsg);
+      setSamples(prev => prev.map(s => s.id === runSampleId ? { ...s, status: "error" as const, error: errMsg } : s));
+    } finally {
+      setIsAnalyzing(false);
+    }
+  };
+
+  // Run genome sequence analysis for ALL sample inputs concurrently!
+  const runAllAnalyses = async () => {
+    setIsAnalyzing(true);
+    setAnalysisError(null);
+    
+    // Set all to analyzing
+    setSamples(prev => prev.map(s => ({ ...s, status: "analyzing" as const })));
+
+    try {
+      const results = await Promise.all(
+        samples.map(async (samp) => {
+          try {
+            const response = await fetch("/api/analyze-variants", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({
+                referenceSeq,
+                sampleSeq: samp.sequence,
+                geneName,
+                diseaseContext,
+              }),
+            });
+
+            if (!response.ok) {
+              throw new Error(`Cloud compute node returned status ${response.status}`);
+            }
+
+            const data: AnalysisResponse = await response.json();
+            if (data.success) {
+              return {
+                ...samp,
+                status: "completed" as const,
+                result: data,
+                error: null
+              };
+            } else {
+              return {
+                ...samp,
+                status: "error" as const,
+                error: "Sequence alignment failed."
+              };
+            }
+          } catch (err: any) {
+            return {
+              ...samp,
+              status: "error" as const,
+              error: err.message || "Compute node transient error."
+            };
+          }
+        })
+      );
+
+      setSamples(results);
+
+      // Pick the currently selected active sample to display in details
+      const currentActive = results.find(s => s.id === activeSampleId) || results[0];
+      if (currentActive) {
+        setSampleSeq(currentActive.sequence);
+        if (currentActive.result) {
+          setAnalysisResult(currentActive.result);
+          setAnalysisError(null);
+          // Update CRISPR guide candidates for active sample
+          const guides = findSgRNAs(referenceSeq, currentActive.result.variants);
+          setSgRNACandidates(guides);
+          if (guides.length > 0) {
+            setSelectedSgRNA(guides[0]);
+          } else {
+            setSelectedSgRNA(null);
+          }
+          setCrisprSimulation(null);
+        } else {
+          setAnalysisResult(null);
+          setAnalysisError(currentActive.error || null);
+          setSgRNACandidates([]);
+          setSelectedSgRNA(null);
+        }
+      }
+    } catch (err: any) {
+      console.error("Multi-sample execution failure:", err);
+      setAnalysisError("An unexpected exception occurred during high-throughput sequence computation.");
     } finally {
       setIsAnalyzing(false);
     }
@@ -723,7 +1043,17 @@ I have compiled the full clinical interpretation report under the **Interpretati
   // Run on mount with the default preset
   useEffect(() => {
     const defaultPreset = GENE_PRESETS.find((p) => p.id === "hbb") || GENE_PRESETS[0];
-    runAnalysis(defaultPreset.referenceSeq, defaultPreset.sampleSeq, defaultPreset.name.split(" (")[0], defaultPreset.diseaseContext);
+    const initialSample: SampleInput = {
+      id: "sample-hbb",
+      name: "Patient Alt 1 (Sickle Cell)",
+      sequence: defaultPreset.sampleSeq,
+      status: "idle",
+      result: null,
+      error: null
+    };
+    setSamples([initialSample]);
+    setActiveSampleId("sample-hbb");
+    runAnalysis(defaultPreset.referenceSeq, defaultPreset.sampleSeq, defaultPreset.name.split(" (")[0], defaultPreset.diseaseContext, "sample-hbb");
   }, []);
 
   // Handle clinical consultation chat sending
@@ -1077,19 +1407,156 @@ I have compiled the full clinical interpretation report under the **Interpretati
                   ></textarea>
                 </div>
 
-                <div>
-                  <div className="flex justify-between items-center mb-1">
-                    <label className="block text-[10px] text-slate-400 uppercase font-semibold">Mutated / Sample Sequence (DNA)</label>
-                    <span className="text-[10px] font-mono text-slate-500">{sampleSeq.length} Base pairs</span>
+                {/* Concurrent Multi-Sample File Upload & Creation Hub */}
+                <div className="mt-4 border-t border-slate-800/60 pt-4" id="multi-sample-section">
+                  <div className="flex justify-between items-center mb-1.5">
+                    <label className="block text-[10px] text-slate-400 uppercase font-bold tracking-wider">
+                      Mutated / Sample Sequences (DNA) - Concurrent Management
+                    </label>
+                    <span className="text-[10px] text-teal-400 font-mono bg-teal-500/10 px-1.5 py-0.5 rounded border border-teal-500/20">
+                      {samples.length} concurrent samples
+                    </span>
                   </div>
-                  <textarea
-                    rows={2}
-                    value={sampleSeq}
-                    onChange={(e) => setSampleSeq(e.target.value.toUpperCase().replace(/[^A-Z]/g, ""))}
-                    placeholder="Enter matched sample patient DNA nucleotides (A, T, C, G)..."
-                    className="w-full bg-[#18181f]/80 border border-slate-800 rounded p-3 text-xs font-mono text-white leading-relaxed focus:outline-none focus:border-teal-500 h-16 resize-none"
-                    id="input-sample-seq"
-                  ></textarea>
+
+                  {/* Drag-and-drop plus click file selection dropzone */}
+                  <div
+                    onDragEnter={handleDrag}
+                    onDragOver={handleDrag}
+                    onDragLeave={handleDrag}
+                    onDrop={handleDrop}
+                    onClick={() => fileInputRef.current?.click()}
+                    className={`border-2 border-dashed rounded-xl p-6 text-center cursor-pointer transition-all ${
+                      isDragActive 
+                        ? "border-teal-400 bg-teal-500/5 text-teal-300" 
+                        : "border-slate-800 hover:border-slate-700 bg-slate-900/10 hover:bg-[#18181f]/30"
+                    }`}
+                    id="sample-dragzone"
+                  >
+                    <input
+                      type="file"
+                      ref={fileInputRef}
+                      className="hidden"
+                      onChange={(e) => e.target.files && handleAddFiles(e.target.files)}
+                      multiple
+                      accept=".fasta,.fa,.txt"
+                    />
+                    <Dna className={`w-8 h-8 mx-auto mb-2 text-slate-500 ${isDragActive ? "text-teal-400 animate-pulse" : ""}`} />
+                    <p className="text-xs text-slate-300 font-bold">
+                      Drag & Drop sample files here or <span className="text-teal-400 hover:underline">browse locally</span>
+                    </p>
+                    <p className="text-[10px] text-slate-500 uppercase font-mono mt-1">
+                      Supports Multi-Record FASTA (.fasta, .fa) or raw sequence (.txt)
+                    </p>
+                  </div>
+
+                  {/* Multi-sample dynamic fields */}
+                  <div className="mt-4 space-y-3 max-h-[300px] overflow-y-auto custom-scrollbar pr-1" id="samples-list-container">
+                    {samples.map((samp, idx) => {
+                      const isActive = samp.id === activeSampleId;
+                      return (
+                        <div
+                          key={samp.id}
+                          className={`p-3.5 rounded-lg border transition-all ${
+                            isActive 
+                              ? "bg-slate-900/60 border-teal-500/80 shadow-md shadow-teal-500/5" 
+                              : "bg-[#18181f]/30 border-slate-800"
+                          }`}
+                          id={`sample-card-${samp.id}`}
+                        >
+                          <div className="flex items-center justify-between gap-3 mb-2">
+                            <div className="flex-1 max-w-[200px]">
+                              <input
+                                type="text"
+                                value={samp.name}
+                                onChange={(e) => handleUpdateSampleName(samp.id, e.target.value)}
+                                className="bg-[#0c0c0e] border border-slate-800 rounded px-2 py-1 text-xs text-white focus:outline-none focus:border-teal-400 w-full font-bold font-sans"
+                                placeholder={`Sample ${idx + 1}`}
+                                id={`sample-name-input-${samp.id}`}
+                              />
+                            </div>
+                            <div className="flex items-center gap-2">
+                              <span className="text-[9px] font-mono text-slate-500 bg-slate-900 px-1.5 py-0.5 rounded border border-slate-800">
+                                {samp.sequence.length} bp
+                              </span>
+                              
+                              {samp.status === "completed" && (
+                                <span className="w-2 h-2 rounded-full bg-emerald-400" title="Analysis ready"></span>
+                              )}
+                              {samp.status === "analyzing" && (
+                                <span className="w-2 h-2 rounded-full bg-teal-400 animate-ping" title="Aligning..."></span>
+                              )}
+                              {samp.status === "idle" && (
+                                <span className="w-2 h-2 rounded-full bg-slate-500" title="Uncomputed"></span>
+                              )}
+                              {samp.status === "error" && (
+                                <span className="w-2 h-2 rounded-full bg-red-400" title="Error aligning"></span>
+                              )}
+
+                              <button
+                                type="button"
+                                onClick={() => handleSelectSample(samp.id)}
+                                className={`px-2 py-0.5 rounded text-[9px] font-bold uppercase transition-all cursor-pointer ${
+                                  isActive 
+                                    ? "bg-teal-500/10 text-teal-400 border border-teal-500/20" 
+                                    : "bg-slate-800 hover:bg-slate-700 text-slate-400 hover:text-white"
+                                }`}
+                                id={`sample-trigger-${samp.id}`}
+                              >
+                                {isActive ? "Active Workspace" : "Set Active"}
+                              </button>
+                            </div>
+                          </div>
+
+                          <div className="flex gap-2 items-center">
+                            <div className="flex-1">
+                              <textarea
+                                rows={1}
+                                value={samp.sequence}
+                                onChange={(e) => handleUpdateSampleSequence(samp.id, e.target.value)}
+                                placeholder="Enter match sample patient DNA nucleotides (A, T, C, G)..."
+                                className="w-full bg-[#0c0c0e] border border-slate-800 rounded px-2.5 py-1.5 text-[11px] font-mono text-white leading-relaxed focus:outline-none focus:border-teal-500 h-11 resize-none h-11"
+                                id={`sample-seq-textarea-${samp.id}`}
+                              ></textarea>
+                            </div>
+                            <div className="flex flex-col gap-1.5">
+                              <button
+                                type="button"
+                                onClick={() => runAnalysis(undefined, samp.sequence, undefined, undefined, samp.id)}
+                                disabled={isAnalyzing || !referenceSeq.trim() || !samp.sequence.trim()}
+                                className="p-1 px-1.5 bg-slate-800 hover:bg-slate-700 hover:text-teal-400 rounded border border-slate-750 text-[10px] text-slate-400 flex items-center justify-center gap-1 cursor-pointer transition-colors disabled:opacity-50"
+                                title="Run sequence alignment individually"
+                                id={`sample-align-individual-${samp.id}`}
+                              >
+                                <Cpu className="w-3.5 h-3.5" />
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => handleDeleteSample(samp.id)}
+                                disabled={samples.length <= 1}
+                                className="p-1 px-1.5 bg-slate-800 hover:bg-red-500/20 hover:text-red-400 rounded border border-slate-750 text-[10px] text-slate-400 flex items-center justify-center gap-1 cursor-pointer transition-colors disabled:opacity-30 disabled:hover:scale-100"
+                                title="Remove sample from workspace"
+                                id={`sample-delete-${samp.id}`}
+                              >
+                                <Trash2 className="w-3.5 h-3.5" />
+                              </button>
+                            </div>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+
+                  <div className="mt-3 flex justify-end">
+                    <button
+                      type="button"
+                      onClick={handleAddBlankSample}
+                      className="px-3 py-1.5 border border-dashed border-slate-700 hover:border-slate-500 bg-slate-900/40 hover:bg-[#18181f]/40 text-slate-400 hover:text-slate-200 text-xs font-semibold rounded-lg flex items-center gap-1.5 transition-all cursor-pointer shadow"
+                      id="btn-add-blank-sample"
+                    >
+                      <Plus className="w-3.5 h-3.5" />
+                      <span>Add Additional Sample Field</span>
+                    </button>
+                  </div>
                 </div>
               </div>
 
@@ -1110,7 +1577,7 @@ I have compiled the full clinical interpretation report under the **Interpretati
                   )}
                   <button
                     onClick={() => runAnalysis()}
-                    disabled={isAnalyzing || !referenceSeq.trim() || !sampleSeq.trim()}
+                    disabled={isAnalyzing || !referenceSeq.trim() || samples.some(s => !s.sequence.trim())}
                     className="px-6 py-2 bg-teal-500 hover:bg-teal-400 text-black font-bold text-xs uppercase tracking-wider rounded-lg flex items-center gap-2 transition-all cursor-pointer shadow-lg shadow-teal-500/20 disabled:scale-95 disabled:bg-slate-800 disabled:text-slate-500"
                     id="btn-run-analysis"
                   >
@@ -1122,7 +1589,7 @@ I have compiled the full clinical interpretation report under the **Interpretati
                     ) : (
                       <>
                         <Cpu className="w-3.5 h-3.5" />
-                        <span>Execute Sequence Run</span>
+                        <span>Execute Active Alignment</span>
                       </>
                     )}
                   </button>
@@ -1190,6 +1657,113 @@ I have compiled the full clinical interpretation report under the **Interpretati
                 </div>
 
               </div>
+            )}
+
+            {/* Multi-Sample Consolidated Comparison Table */}
+            {samples.length > 0 && (
+              <section className="bg-[#121216]/90 border border-slate-850 rounded-xl p-5 shadow-lg shadow-black/40 mt-4" id="multi-sample-comparison-container">
+                <div className="flex items-center justify-between pb-3 border-b border-slate-800 mb-4">
+                  <div>
+                    <h3 className="text-xs font-bold text-white uppercase tracking-widest flex items-center gap-2">
+                      <Activity className="w-3.5 h-3.5 text-teal-400" /> Multi-Sample Comparison Table
+                    </h3>
+                    <p className="text-[10px] text-slate-500 mt-1 leading-normal uppercase font-mono">
+                      Consolidated summary matrix across all {samples.length} concurrent sample inputs
+                    </p>
+                  </div>
+                  <button
+                    onClick={runAllAnalyses}
+                    disabled={isAnalyzing}
+                    className="px-3 py-1 bg-teal-500/10 hover:bg-teal-500/20 text-teal-400 border border-teal-500/30 hover:border-teal-500/50 rounded text-[10px] font-mono tracking-wider font-bold transition-all flex items-center gap-1.5 cursor-pointer disabled:opacity-50"
+                    id="btn-run-all-samples"
+                  >
+                    <RefreshCw className={`w-3 h-3 ${isAnalyzing ? "animate-spin" : ""}`} />
+                    <span>Run All {samples.length} Samples</span>
+                  </button>
+                </div>
+
+                <div className="overflow-x-auto rounded-lg border border-slate-800 select-none">
+                  <table className="w-full text-left border-collapse" id="multi-sample-summary-table">
+                    <thead>
+                      <tr className="bg-[#18181f]/70 text-[10px] uppercase font-mono tracking-wider text-slate-500 border-b border-slate-800">
+                        <th className="py-2.5 px-4 font-semibold text-center">Active</th>
+                        <th className="py-2.5 px-4 font-semibold">Sample Name</th>
+                        <th className="py-2.5 px-4 font-semibold">Status</th>
+                        <th className="py-2.5 px-4 font-semibold text-center">Length (bp)</th>
+                        <th className="py-2.5 px-4 font-semibold text-center">GC Ratio</th>
+                        <th className="py-2.5 px-4 font-semibold text-center">Score</th>
+                        <th className="py-2.5 px-4 font-semibold text-center text-sky-400">Subs</th>
+                        <th className="py-2.5 px-4 font-semibold text-center text-red-400">Dels</th>
+                        <th className="py-2.5 px-4 font-semibold text-center text-purple-400">Ins</th>
+                        <th className="py-2.5 px-3 font-semibold text-center text-amber-500">Variants</th>
+                        <th className="py-2.5 px-4 font-semibold text-right">Actions</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-slate-850 font-mono text-xs">
+                      {samples.map((samp) => {
+                        const metrics = getSampleMetrics(samp);
+                        const isActive = samp.id === activeSampleId;
+                        return (
+                          <tr 
+                            key={samp.id}
+                            className={`transition-colors hover:bg-slate-800/20 ${isActive ? "bg-teal-500/5 font-medium" : "text-slate-400"}`}
+                            id={`row-sample-${samp.id}`}
+                          >
+                            <td className="py-3 px-4 text-center">
+                              <span className={`inline-block w-2.5 h-2.5 rounded-full ${isActive ? "bg-teal-400 animate-pulse shadow shadow-teal-500" : "bg-slate-800 border border-slate-700"}`}></span>
+                            </td>
+                            <td className="py-3 px-4 text-white font-sans font-bold max-w-[180px] truncate">
+                              {samp.name}
+                            </td>
+                            <td className="py-3 px-4">
+                              {samp.status === "completed" && (
+                                <span className="inline-flex items-center gap-1 text-[10px] text-emerald-400 bg-emerald-500/10 px-1.5 py-0.5 rounded border border-emerald-500/20 uppercase font-mono">
+                                  <CheckCircle2 className="w-3 h-3 text-emerald-500" /> Ready
+                                </span>
+                              )}
+                              {samp.status === "analyzing" && (
+                                <span className="inline-flex items-center gap-1 text-[10px] text-teal-400 bg-teal-500/10 px-1.5 py-0.5 rounded border border-teal-500/20 uppercase font-mono">
+                                  <RefreshCw className="w-3 h-3 animate-spin text-teal-400" /> Aligning
+                                </span>
+                              )}
+                              {samp.status === "idle" && (
+                                <span className="inline-flex items-center gap-1 text-[10px] text-slate-500 bg-slate-500/10 px-1.5 py-0.5 rounded border border-slate-500/20 uppercase font-mono">
+                                  ● Idle
+                                </span>
+                              )}
+                              {samp.status === "error" && (
+                                <span className="inline-flex items-center gap-1 text-[10px] text-red-500 bg-red-400/10 px-1.5 py-0.5 rounded border border-red-400/20 uppercase font-mono" title={samp.error || ""}>
+                                  <AlertTriangle className="w-3 h-3 text-red-500" /> Error
+                                </span>
+                              )}
+                            </td>
+                            <td className="py-3 px-4 text-center text-slate-300">{metrics.length}</td>
+                            <td className="py-3 px-4 text-center text-teal-300">{metrics.gc}%</td>
+                            <td className="py-3 px-4 text-center text-teal-500 font-bold">{metrics.score}</td>
+                            <td className="py-3 px-4 text-center text-sky-400 font-medium">{metrics.subs}</td>
+                            <td className="py-3 px-4 text-center text-red-400 font-medium">{metrics.dels}</td>
+                            <td className="py-3 px-4 text-center text-purple-400 font-medium">{metrics.ins}</td>
+                            <td className="py-3 px-3 text-center text-amber-500 font-extrabold">{metrics.total}</td>
+                            <td className="py-3 px-4 text-right">
+                              <button
+                                onClick={() => handleSelectSample(samp.id)}
+                                className={`px-2 py-1 rounded text-[10px] uppercase font-semibold tracking-wider cursor-pointer transition-all ${
+                                  isActive
+                                    ? "bg-teal-500 text-black cursor-default font-extrabold shadow"
+                                    : "bg-slate-800 hover:bg-slate-750 text-slate-300 hover:text-white border border-slate-700/60"
+                                }`}
+                                id={`action-btn-view-${samp.id}`}
+                              >
+                                {isActive ? "Active View" : "Load Report"}
+                              </button>
+                            </td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+              </section>
             )}
 
             {/* WORK Tab buttons */}
